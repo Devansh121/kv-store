@@ -1,31 +1,46 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/Devansh121/kv-store/config"
+	"github.com/Devansh121/kv-store/core"
 )
 
-func readCommand(conn net.Conn) (string, error) {
+func readCommand(conn net.Conn) (*core.RedisCMD, error) {
 	// TODO: Max read in one shot is 512 bytes.
 	// To allow input > 512 bytes, repeated reads are needed until
 	// EOF or the designated delimiter is reached.
 	buffer := make([]byte, 512)
 	n, err := conn.Read(buffer)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(buffer[:n]), nil
+
+	tokens, err := core.DecodeArrayString(buffer[:n])
+	if err != nil {
+		return nil, err
+	}
+	return &core.RedisCMD{
+		Cmd:  strings.ToUpper(tokens[0]),
+		Args: tokens[1:],
+	}, nil
 }
 
-func respond(response string, conn net.Conn) error {
-	if _, err := conn.Write([]byte(response)); err != nil {
-		return err
+func respondError(err error, conn net.Conn) {
+	conn.Write([]byte(fmt.Sprintf("-%s\r\n", err)))
+}
+
+func respond(cmd *core.RedisCMD, conn net.Conn) {
+	err := core.EvalAndRespond(cmd, conn)
+	if err != nil {
+		respondError(err, conn)
 	}
-	return nil
 }
 
 func RunSyncTCPServer() {
@@ -61,10 +76,7 @@ func RunSyncTCPServer() {
 				log.Println("Read error:", err)
 			}
 
-			log.Println("Command:", command)
-			if err = respond(command, conn); err != nil {
-				log.Print("Write error:", err)
-			}
+			respond(command, conn)
 		}
 	}
 }
